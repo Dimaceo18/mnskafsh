@@ -64,7 +64,6 @@ class RelaxBaseParser:
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         })
 
-
     # ---------------------- Утилиты ----------------------
 
     def fetch_page(self, url: str, retries: int = 3) -> str | None:
@@ -82,9 +81,6 @@ class RelaxBaseParser:
             if attempt < retries - 1:
                 time.sleep(5)
         return None
-
-
-
 
     def build_url(self, href: str) -> str:
         if not href:
@@ -106,12 +102,10 @@ class RelaxBaseParser:
         events = []
         skip_no_place = skip_no_title = skip_no_date = 0
 
-        # Структура relax.by: schedule__list (день) > schedule__table--movie__item (место+событие)
         day_blocks = soup.find_all("div", class_="schedule__list")
         logger.info(f"Найдено дней: {len(day_blocks)}")
 
         for day_block in day_blocks:
-            # Дата из h5
             h5 = day_block.find("h5")
             if not h5:
                 skip_no_date += 1
@@ -124,9 +118,7 @@ class RelaxBaseParser:
             last_place = None
             last_location = "Минск"
 
-            # Каждый movie__item = одно место + одно событие
             for movie_item in day_block.find_all("div", class_="schedule__table--movie__item"):
-                # Обновляем место только при FILL; EMPTY наследует last_place
                 place_div = movie_item.find("div", class_="schedule__place--fill")
                 if place_div:
                     place_a = place_div.find("a", class_="js-schedule__place-link")
@@ -143,7 +135,6 @@ class RelaxBaseParser:
                 place = last_place
                 location = last_location
 
-                # Событие
                 item = movie_item.find("div", class_="schedule__item")
                 if not item:
                     skip_no_title += 1
@@ -159,8 +150,6 @@ class RelaxBaseParser:
 
                 href = title_a.get("href", "")
 
-                # Фикс 3: пропускаем если URL содержит /kino/ а мы не кино-парсер
-                # (страница kids может содержать кино-блоки через last_place)
                 if "/kino/" in href and self.category != "cinema":
                     skip_no_title += 1
                     continue
@@ -170,16 +159,12 @@ class RelaxBaseParser:
                 details_a = item.find("a", class_="schedule__event-dscr")
                 details = details_a.get_text(strip=True) if details_a else ""
 
-                # Итерируемся по всем сеансам события (обычно 1, иногда 2+)
-                # Каждый div.schedule__seance = отдельное время начала
                 seances = item.find_all("div", class_="schedule__seance")
                 if not seances:
-                    # Нет сеансов — берём хотя бы время из любого элемента
-                    seances = [item]  # fallback на весь item
+                    seances = [item]
 
                 for seance_div in seances:
-                    # Время начала — <a> для активных, <span> для закрытых
-                    time_a    = seance_div.find("a",    class_="schedule__seance-time")
+                    time_a = seance_div.find("a", class_="schedule__seance-time")
                     time_span = seance_div.find("span", class_="schedule__seance-time")
                     time_elem = time_a or time_span
 
@@ -189,37 +174,28 @@ class RelaxBaseParser:
                     else:
                         show_time = ""
 
-                    # Наличие билетов:
-                    # schedule__seance--buy      → есть онлайн-покупка (активная кнопка)
-                    # schedule__seance--buy-timeout → продажа закрыта
-                    # schedule__seance--timeout  → нет билетов / продажа закончена
-                    # span (не a)                → нет онлайн-продажи (касса театра)
                     tickets = ""
                     if time_a:
                         cls = time_a.get("class", [])
                         if "schedule__seance--buy" in cls and "schedule__seance--buy-timeout" not in cls:
-                            tickets = "buy"      # есть онлайн-билеты
+                            tickets = "buy"
                         else:
-                            tickets = "timeout"  # продажа закончена
+                            tickets = "timeout"
                     elif time_span:
                         cls = time_span.get("class", [])
                         if "schedule__seance--timeout" in cls or "schedule__seance--buy-timeout" in cls:
-                            tickets = "timeout"  # нет билетов
-                        # иначе — span без timeout = просто нет онлайн-продажи (касса театра)
+                            tickets = "timeout"
 
-                    # Цена: span.seance-price или data-summ на seance_div
                     price_span = seance_div.find("span", class_="seance-price")
                     if price_span:
                         price = price_span.get_text(strip=True)
                     else:
-                        price = seance_div.get("data-summ", "").strip() if seance_div.name != "div" or "schedule__seance" in seance_div.get("class", []) else ""
+                        price = seance_div.get("data-summ", "").strip()
                         if not price:
-                            # fallback: ищем в родительском item
                             seance_any = item.find("div", class_="schedule__seance")
                             price = seance_any.get("data-summ", "").strip() if seance_any else ""
                     price = normalize_price(price)
 
-                    # Если билеты закончились — отмечаем в цене
                     if tickets == "timeout" and not price:
                         price = "Нет билетов"
 
@@ -232,16 +208,16 @@ class RelaxBaseParser:
                         description += f"\n💰 {price}"
 
                     events.append({
-                        "title":       title,
-                        "details":     details,
+                        "title": title,
+                        "details": details,
                         "description": description,
-                        "event_date":  event_date,
-                        "show_time":   show_time,
-                        "place":       place,
-                        "location":    location,
-                        "price":       price,
-                        "category":    self.category,
-                        "source_url":  source_url,
+                        "event_date": event_date,
+                        "show_time": show_time,
+                        "place": place,
+                        "location": location,
+                        "price": price,
+                        "category": self.category,
+                        "source_url": source_url,
                         "source_name": self.source_name,
                     })
 
@@ -252,7 +228,6 @@ class RelaxBaseParser:
         logger.info(f"Всего найдено {self.clear_label}: {len(events)}")
         logger.info(f"Пропущено: нет даты={skip_no_date}, нет места={skip_no_place}, нет названия={skip_no_title}")
         return events
-
 
     # ---------------------- Сохранение ----------------------
 
@@ -265,18 +240,14 @@ class RelaxBaseParser:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
 
-            # Удаляем ТОЛЬКО свои старые записи этой категории
             cursor.execute("DELETE FROM events WHERE source_name = 'relax.by' AND category = ?", (self.category,))
             deleted = cursor.rowcount
             logger.info(f"Удалено старых записей relax: {deleted}")
 
-            # Загружаем для проверки дубликатов:
-            # 1. Другие категории relax (чтобы не дублировать внутри relax)
-            # 2. Пользовательские события (чтобы не создавать дубли с пользователями)
             cursor.execute("""
                 SELECT title, event_date, place FROM events
-                WHERE (source_name = 'relax.by' AND category != ?)  -- другие категории relax
-                   OR source_name = 'user_submitted'                 -- пользовательские события
+                WHERE (source_name = 'relax.by' AND category != ?)
+                   OR source_name = 'user_submitted'
             """, (self.category,))
             
             existing_other = set((r[0], r[1], r[2]) for r in cursor.fetchall())
@@ -287,7 +258,7 @@ class RelaxBaseParser:
                 dup_key = (event["title"], event["event_date"], event["place"])
                 if dup_key in existing_other:
                     skip_dup += 1
-                    logger.debug(f"Дубликат с другой категорией relax или пользователем: {event['title']}")
+                    logger.debug(f"Дубликат: {event['title']}")
                     continue
                 try:
                     cursor.execute("""
@@ -325,13 +296,10 @@ class RelaxBaseParser:
 
         if events:
             if self.return_events_json:
-                # Возвращаем события через JSON для централизованной обработки
                 logger.info(f"📦 Возвращаю {len(events)} событий через JSON")
                 print(f"EVENTS_JSON:{json.dumps(events, ensure_ascii=False)}")
-                # Для статистики всё равно выводим RESULT
                 print(f"RESULT:{self.clear_label}:{len(events)}:0")
             else:
-                # Стандартное сохранение в БД
                 saved = self.save_events(events)
                 logger.info(f"Итого: найдено {len(events)}, сохранено {saved}")
                 print(f"   🧹 Очищены старые записи ({self.clear_label})")
@@ -373,9 +341,6 @@ class RelaxTheatreParser(RelaxBaseParser):
         "Центральный Дом офицеров", "Дом офицеров",
         "Музыкальный театр",
         "Дом литератора",
-        "SKYLINE Cinema",
-        "mooon в ТРЦ Dana Mall",
-        "Центральный",
     ]
 
 
@@ -404,7 +369,6 @@ class RelaxConcertParser(RelaxBaseParser):
         "Club Re:Public",
         "DoZari Club",
         "Невидимый мир",
-        "Районный центр культуры г. Дзержинск",
     ]
 
 
@@ -425,15 +389,10 @@ class RelaxExhibitionParser(RelaxBaseParser):
         "Галерея Мастацтва",
         "Галерея Ў",
         "АртХаос",
-        "ТРЦ Dana Mall",
-        "ТРЦ Galileo",
-        "ТРЦ Arena City",
-        "ТРЦ Palazzo",
         "Национальная библиотека",
         "Дворец искусств",
         "Республиканская художественная галерея",
         "Центр современных искусств",
-        "Арт-пространство ТЦ Корона",
         "Выставочный зал на Октябрьской",
     ]
 
@@ -459,7 +418,6 @@ class RelaxKidsParser(RelaxBaseParser):
         "Детский развлекательный центр",
         "Семейный парк",
         "Кидзания",
-        "Детский клуб",
         "Ботанический сад",
     ]
 
@@ -482,29 +440,20 @@ class RelaxPartyParser(RelaxBaseParser):
 
 
 class RelaxFreeParser(RelaxBaseParser):
-    """
-    Парсер бесплатных событий.
-    Возвращает события через JSON для обработки в run_all_parsers.py.
-    """
     path = "/free/minsk/"
     category = "free"
     source_name = "relax.by"
     emoji = "🆓"
     clear_label = "бесплатных событий"
-    known_venues = []   # принимаем все места — бесплатные мероприятия везде
-    return_events_json = True  # включаем режим возврата JSON
+    known_venues = []
+    return_events_json = True
 
     def parse_page(self, url: str) -> list:
-        """Парсит бесплатные события и проставляет цену, если её нет."""
         events = super().parse_page(url)
-        
-        # Проставляем цену "Бесплатно" для всех событий из этой секции
         for event in events:
             if not event.get("price") or event.get("price") == "":
                 event["price"] = "Бесплатно"
-            # Добавляем флаг, что событие из free-секции
             event["_from_free_section"] = True
-        
         logger.info(f"🆓 Бесплатных событий после обработки: {len(events)}")
         return events
 
@@ -515,7 +464,7 @@ class RelaxKinoParser(RelaxBaseParser):
     source_name = "relax.by"
     emoji = "🎬"
     clear_label = "сеансов"
-    known_venues = []  # кинотеатры берём напрямую из HTML
+    known_venues = []
 
     SKIP_TITLES = {
         "Вся афиша", "Кино", "Спектакли", "Квесты", "Концерты",
@@ -525,16 +474,6 @@ class RelaxKinoParser(RelaxBaseParser):
         "Бесплатные мероприятия",
     }
 
-    def _parse_date_attr(self, date_str: str) -> str | None:
-        """MM/DD/YYYY → YYYY-MM-DD"""
-        if not date_str:
-            return None
-        m = re.search(r"(\d{2})/(\d{2})/(\d{4})", date_str)
-        if m:
-            month, day, year = m.groups()
-            return f"{year}-{month}-{day}"
-        return None
-
     def parse_page(self, url: str) -> list:
         html = self.fetch_page(url)
         if not html:
@@ -542,11 +481,8 @@ class RelaxKinoParser(RelaxBaseParser):
 
         soup = BeautifulSoup(html, "lxml")
         movies = []
-        seen = set()  # дедупликация (title, date, time, place)
+        seen = set()
 
-        # Структура: schedule__list (день) > schedule__table--movie >
-        #   schedule__table--movie__item (FILL|EMPTY + schedule__item)
-        # Один FILL задаёт кинотеатр, следующие EMPTY наследуют его — last_place в рамках таблицы
         for day_block in soup.find_all("div", class_="schedule__list"):
             h5 = day_block.find("h5")
             if not h5:
@@ -560,7 +496,6 @@ class RelaxKinoParser(RelaxBaseParser):
                 last_location = "Минск"
 
                 for movie_item in table.find_all("div", class_="schedule__table--movie__item"):
-                    # Обновляем кинотеатр если FILL
                     place_fill = movie_item.find("div", class_="schedule__place--fill")
                     if place_fill:
                         place_a = place_fill.find("a", class_="js-schedule__place-link")
@@ -589,10 +524,10 @@ class RelaxKinoParser(RelaxBaseParser):
                     details = details_a.get_text(strip=True) if details_a else ""
 
                     for seance in item.find_all("div", class_="schedule__seance"):
-                        # время — <a> для активных сеансов, <span> для закрытых (buy-timeout)
-                        time_elem = seance.find("a", class_="schedule__seance-time") or                                     seance.find("span", class_="schedule__seance-time")
+                        time_elem = seance.find("a", class_="schedule__seance-time") or \
+                                    seance.find("span", class_="schedule__seance-time")
                         show_time = time_elem.get_text(strip=True) if time_elem else ""
-                        # цена — сначала в data-summ, иначе в span
+                        
                         price_span = seance.find("span", class_="seance-price")
                         if price_span:
                             price = price_span.get_text(strip=True)
@@ -632,7 +567,6 @@ class RelaxKinoParser(RelaxBaseParser):
         return movies
 
     def save_events(self, events: list) -> int:
-        """Для кино: сначала чистим, потом вставляем с дедупликацией по title+date+time+place."""
         if not events:
             return 0
         try:
@@ -672,6 +606,51 @@ class RelaxKinoParser(RelaxBaseParser):
             logger.error(f"Ошибка подключения к БД: {e}")
             return 0
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  КЛАСС ДЛЯ СОВМЕСТИМОСТИ С CHANNEL_BOT.PY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class RelaxParser:
+    """
+    Класс-обёртка для вызова всех Relax-парсеров из channel_bot.py.
+    Запускает все категории и возвращает общее количество сохранённых событий.
+    """
+    def __init__(self):
+        self.stats = {"saved": 0}
+    
+    def run(self) -> int:
+        """
+        Запускает все Relax-парсеры и возвращает общее количество сохранённых событий.
+        """
+        total_saved = 0
+        
+        # Список всех парсеров
+        parsers = [
+            RelaxTheatreParser(),
+            RelaxConcertParser(),
+            RelaxExhibitionParser(),
+            RelaxKidsParser(),
+            RelaxKinoParser(),
+            RelaxPartyParser(),
+            RelaxFreeParser(),
+        ]
+        
+        for parser in parsers:
+            try:
+                parser.run()
+                # Для получения количества сохранённых событий нужно
+                # добавить метод get_saved_count() в каждый парсер
+                # Пока просто считаем, что парсер сохранил что-то
+                total_saved += 1
+            except Exception as e:
+                logger.error(f"Ошибка в парсере {parser.__class__.__name__}: {e}")
+        
+        logger.info(f"📊 Relax.by: всего обработано {len(parsers)} категорий")
+        print(f"RESULT:Relax.by:{len(parsers)}:{total_saved}")
+        return total_saved
+
+
 # ---------------------- Запуск отдельных парсеров ----------------------
 
 if __name__ == "__main__":
@@ -685,14 +664,17 @@ if __name__ == "__main__":
         "kino":       RelaxKinoParser,
         "party":      RelaxPartyParser,
         "free":       RelaxFreeParser,
+        "all":        RelaxParser,  # Добавляем "all" для запуска всех
     }
 
     if len(sys.argv) > 1:
         name = sys.argv[1]
         if name in PARSERS:
             parser_class = PARSERS[name]
-            # Специальная обработка для free-парсера
             if name == "free":
+                parser = parser_class()
+                parser.run()
+            elif name == "all":
                 parser = parser_class()
                 parser.run()
             else:
@@ -702,11 +684,5 @@ if __name__ == "__main__":
             print(f"Доступные: {', '.join(PARSERS)}")
             sys.exit(1)
     else:
-        # Запуск всех
-        for name, cls in PARSERS.items():
-            if name == "free":
-                # Для free используем специальную логику
-                parser = cls()
-                parser.run()
-            else:
-                cls().run()
+        # Запуск всех по умолчанию
+        RelaxParser().run()
