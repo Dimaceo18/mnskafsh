@@ -1,6 +1,6 @@
 services:
-  # Telegram бот (веб-сервис)
-  - type: web
+  # Telegram бот (background worker — не требует порта)
+  - type: worker
     name: minsk-afisha-bot
     runtime: python
     plan: free
@@ -22,7 +22,7 @@ services:
       - key: PUBLISH_INTERVAL_HOURS
         value: "4"
 
-  # Парсер (Cron Job - каждые 4 часа)
+  # Парсер (Cron Job)
   - type: cron
     name: minsk-afisha-parser
     runtime: python
@@ -37,7 +37,7 @@ services:
       - key: ADMIN_ID
         sync: false
 
-  # Утренний дайджест (Cron Job - каждый день в 9:00)
+  # Утренний дайджест (Cron Job)
   - type: cron
     name: minsk-afisha-digest
     runtime: python
