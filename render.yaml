@@ -1,4 +1,5 @@
 services:
+  # Telegram бот (веб-сервис)
   - type: web
     name: minsk-afisha-bot
     runtime: python
@@ -12,7 +13,16 @@ services:
         sync: false
       - key: ADMIN_ID
         sync: false
+      - key: MAX_POSTS_PER_HOUR
+        value: "5"
+      - key: MAX_POSTS_PER_DAY
+        value: "20"
+      - key: MORNING_DIGEST_TIME
+        value: "09:00"
+      - key: PUBLISH_INTERVAL_HOURS
+        value: "4"
 
+  # Парсер (Cron Job - каждые 4 часа)
   - type: cron
     name: minsk-afisha-parser
     runtime: python
@@ -25,4 +35,17 @@ services:
       - key: CHANNEL_ID
         sync: false
       - key: ADMIN_ID
+        sync: false
+
+  # Утренний дайджест (Cron Job - каждый день в 9:00)
+  - type: cron
+    name: minsk-afisha-digest
+    runtime: python
+    schedule: "0 9 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -c "import asyncio; from channel_bot import send_morning_digest; asyncio.run(send_morning_digest())"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID
         sync: false
