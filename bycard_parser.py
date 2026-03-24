@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 # bycard_parser.py
 # Парсер для bycard.by — театры Минска
-#
-# Стратегия:
-#   1. Загружаем /objects/minsk/1 → список всех театров (id + название)
-#   2. Для каждого театра загружаем /objects/minsk/1/{id} → парсим NUXT sessions
-#   3. Из NUXT: название спектакля, дата, время, цена — точные, не диапазоны
 
 import os
 import re
@@ -14,7 +9,7 @@ import sqlite3
 import logging
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 import requests
 from bs4 import BeautifulSoup
@@ -121,10 +116,7 @@ def resolve(var: str, var_map: dict) -> str:
 # ── Список театров ─────────────────────────────────────────────────────────────
 
 def fetch_theatre_list(html: str) -> list[dict]:
-    """
-    Парсит /objects/minsk/1.
-    Возвращает [{"id": "56", "name": "...", "url": "..."}, ...]
-    """
+    """Парсит /objects/minsk/1. Возвращает [{"id": "56", "name": "...", "url": "..."}, ...]"""
     soup = BeautifulSoup(html, "lxml")
     theatres = []
     seen_ids: set = set()
@@ -178,17 +170,7 @@ def fetch_theatre_list(html: str) -> list[dict]:
 # ── Парсинг страницы театра ────────────────────────────────────────────────────
 
 def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
-    """
-    Парсит NUXT sessions со страницы /objects/minsk/1/{id}.
-
-    NUXT sessions структура:
-      {id:N, performanceId:VAR, name:VAR, timeSpending:VAR,
-       timeSpendingStopsale:VAR, isSaleOpen:VAR, isBooking:VAR,
-       minPrice:VAR, maxPrice:VAR, type:VAR, ...}
-
-    isSaleOpen=true  → билеты есть
-    isSaleOpen=false → нет билетов (всё равно сохраняем, цену ставим из минцены)
-    """
+    """Парсит NUXT sessions со страницы /objects/minsk/1/{id}."""
     soup = BeautifulSoup(html, "lxml")
     var_map = decode_nuxt(html)
 
@@ -209,7 +191,6 @@ def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
                 addr = d.get("address", {})
                 street = addr.get("streetAddress", "")
                 if street:
-                    # Убираем "Минск, " из начала — уже есть в location города
                     location = re.sub(r'^[Мм]инск,?\s*', '', street).strip() or street
                 break
         except Exception:
@@ -227,8 +208,6 @@ def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
         if "__NUXT__" not in t:
             continue
 
-        # Более гибкий regex — id может быть числом или сжатой переменной (bs, bl)
-        # timeSpendingStopsale может быть числом или переменной — \w+ покрывает оба
         sessions_raw = re.findall(
             r'\{id:(\w+),performanceId:(\w+),name:(\w+),timeSpending:(\w+),'
             r'timeSpendingStopsale:\w+,isSaleOpen:(\w+),isBooking:\w+,'
@@ -241,7 +220,7 @@ def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
             ts_raw   = resolve(ts_var, var_map)
             min_p    = resolve(min_p_var, var_map)
             max_p    = resolve(max_p_var, var_map)
-            is_sale  = resolve(sale_var, var_map)   # "true" / "false"
+            is_sale  = resolve(sale_var, var_map)
 
             if not title or len(title) < 2:
                 continue
@@ -257,7 +236,7 @@ def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
             if not is_future_date(event_date, MAX_DAYS):
                 continue
 
-            # Цена: если билетов нет — пишем "Нет билетов"
+            # Цена
             price = _format_price(min_p, max_p)
             if is_sale != "true":
                 price = "Нет билетов"
@@ -286,33 +265,24 @@ def parse_theatre_page(html: str, venue_fallback: str) -> list[dict]:
                 "category":    "theater",
                 "source_url":  source_url,
                 "source_name": SOURCE_NAME,
-                "_is_sale":    is_sale == "true",
             })
 
-        break  # обрабатываем только первый NUXT скрипт
+        break
 
-    with_tickets    = sum(1 for e in events if e.get("_is_sale"))
+    with_tickets    = sum(1 for e in events if e.get("price") != "Нет билетов")
     without_tickets = len(events) - with_tickets
-    logger.info(f"  [{place}]: {len(events)} сеансов "
-                f"(с билетами: {with_tickets}, без: {without_tickets})")
-
-    # Убираем служебное поле перед возвратом
-    for e in events:
-        e.pop("_is_sale", None)
+    logger.info(f"  [{place}]: {len(events)} сеансов (с билетами: {with_tickets}, без: {without_tickets})")
 
     return events
 
 
 def _format_price(min_p: str, max_p: str) -> str:
-    """
-    Форматирует цену из NUXT.
-    Значения: строка "20.00" (рубли) или число 2000 (копейки, делим на 100).
-    """
+    """Форматирует цену из NUXT."""
     def to_rub(v: str) -> Optional[float]:
         try:
             f = float(v)
             if f > 100 and "." not in str(v):
-                f = f / 100  # копейки → рубли
+                f = f / 100
             return f
         except Exception:
             return None
@@ -380,12 +350,12 @@ def save_events(events: list[dict]) -> int:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
-        # Удаляем ВСЕ старые записи bycard (как ticketpro/bezkassira)
+        # Удаляем ВСЕ старые записи bycard
         cursor.execute("DELETE FROM events WHERE source_name = ?", (SOURCE_NAME,))
         deleted = cursor.rowcount
         logger.info(f"🗑️ Удалено старых записей bycard: {deleted}")
 
-        # Дедупликация внутри текущего запуска по (title, date, time, place)
+        # Дедупликация внутри текущего запуска
         seen: set = set()
         unique_events = []
         for ev in events:
@@ -424,14 +394,33 @@ def save_events(events: list[dict]) -> int:
         return 0
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  КЛАСС ДЛЯ СОВМЕСТИМОСТИ С CHANNEL_BOT.PY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BycardParser:
+    """
+    Класс-обёртка для вызова run() из channel_bot.py.
+    """
+    def __init__(self):
+        self.stats = {"saved": 0}
+    
+    def run(self) -> int:
+        """
+        Запускает парсер и возвращает количество сохранённых событий.
+        """
+        return run()
+
+
 # ── Главный запуск ─────────────────────────────────────────────────────────────
 
-def run():
+def run() -> int:
+    """Основная функция парсинга."""
     logger.info("=" * 60)
     logger.info("🎭 BYCARD парсер запущен")
     logger.info("=" * 60)
 
-    # Загружаем индекс ДО парсинга — там уже есть relax/ticketpro/bezkassira
+    # Загружаем индекс ДО парсинга
     index = load_existing_index()
 
     # Шаг 1: список театров
@@ -481,7 +470,7 @@ def run():
 
     logger.info(f"Дублей с другими источниками: {dup}")
 
-    # Сохраняем (удаляет старые bycard + вставляет новые)
+    # Сохраняем
     saved = save_events(unique)
 
     logger.info(f"Итог: найдено {total_found}, дублей {dup}, сохранено {saved}")
