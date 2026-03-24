@@ -1,10 +1,35 @@
+# Secrets
 .env
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
+env/
+ENV/
+
+# Database
 *.db
 *.db-shm
 *.db-wal
+
+# Logs
 *.log
-.DS_Store
 *.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
