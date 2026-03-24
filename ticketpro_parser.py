@@ -14,12 +14,12 @@ from typing import List, Dict, Optional
 import requests
 from bs4 import BeautifulSoup
 from normalizer import normalize_place, normalize_title, is_minsk_event, format_price_from_offers, normalize_price
-# Определяем путь к БД (локально или на Railway)
-if os.path.exists('/data'):
-    DB_PATH = '/data/events_final.db'  # Railway volume
-else:
-    DB_PATH = 'events_final.db'        # локально
 
+# Определяем путь к БД
+if os.path.exists('/data'):
+    DB_PATH = '/data/events_final.db'
+else:
+    DB_PATH = 'events_final.db'
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 class TicketproParser:
-    def __init__(self, DB_PATH=os.getenv("DB_PATH", "/data/events_final.db")):
-        DB_PATH = DB_PATH
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or DB_PATH
         self.base_url = 'https://www.ticketpro.by'
         
         self.categories = [
@@ -59,6 +59,7 @@ class TicketproParser:
             'duplicates_with_relax': 0,
             'by_category': {}
         }
+        self.last_saved_count = 0
 
     def fetch_page(self, url: str) -> Optional[str]:
         try:
@@ -71,25 +72,26 @@ class TicketproParser:
             logger.error(f"Ошибка загрузки: {e}")
         return None
 
-
-
-
     def load_relax_index(self) -> dict:
         """Загружает все non-Ticketpro события одним запросом в память."""
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT title, event_date, place, show_time
-            FROM events WHERE source_name != 'ticketpro.by'
-        """)
-        rows = cursor.fetchall()
-        conn.close()
-        index = {}
-        for title, date, place, show_time in rows:
-            norm = normalize_title(title)
-            index.setdefault(date, []).append((norm, place or "", show_time or ""))
-        logger.info(f"📋 Загружено {sum(len(v) for v in index.values())} событий из БД для проверки дублей")
-        return index
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT title, event_date, place, show_time
+                FROM events WHERE source_name != 'ticketpro.by'
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+            index = {}
+            for title, date, place, show_time in rows:
+                norm = normalize_title(title)
+                index.setdefault(date, []).append((norm, place or "", show_time or ""))
+            logger.info(f"📋 Загружено {sum(len(v) for v in index.values())} событий из БД для проверки дублей")
+            return index
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить индекс: {e}")
+            return {}
 
     def is_duplicate(self, title: str, event_date: str, place: str,
                      show_time: str, relax_index: dict) -> bool:
@@ -171,7 +173,7 @@ class TicketproParser:
                 try:
                     raw = re.sub(r'[\x00-\x1f\x7f]', ' ', script.string)
                     ld = json.loads(raw)
-                    sd = ld.get('startDate', '')  # "2026-03-05T19:00:00+0300"
+                    sd = ld.get('startDate', '')
                     if sd and 'T' in sd:
                         dt = datetime.fromisoformat(sd)
                         if not event_date:
@@ -190,7 +192,6 @@ class TicketproParser:
                         buy_html = self.fetch_page(buy_url)
                         if buy_html:
                             buy_soup = BeautifulSoup(buy_html, 'lxml')
-                            # Ищем время в странице покупки
                             for sel in ['div.event-time', 'span.time', '.schedule-time',
                                         'div.ticket-time', 'span.event-time']:
                                 t = buy_soup.select_one(sel)
@@ -199,7 +200,6 @@ class TicketproParser:
                                     if m:
                                         show_time = m.group(0)
                                         break
-                            # Fallback: JSON-LD на странице покупки
                             if not show_time:
                                 ld_script = buy_soup.find('script', type='application/ld+json')
                                 if ld_script and ld_script.string:
@@ -245,7 +245,7 @@ class TicketproParser:
 
             return {
                 'title': title,
-                'details': '',        # описание не нужно (по запросу пользователя)
+                'details': '',
                 'description': description,
                 'event_date': event_date,
                 'show_time': show_time,
@@ -321,7 +321,7 @@ class TicketproParser:
             logger.info("Нет событий для сохранения")
             return 0
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         # 1. Удаляем все старые события Ticketpro
@@ -364,9 +364,13 @@ class TicketproParser:
         conn.commit()
         conn.close()
         
+        self.last_saved_count = new_count
         return new_count
 
-    def run(self):
+    def run(self) -> int:
+        """
+        Запускает парсер и возвращает количество сохранённых событий.
+        """
         logger.info("="*60)
         logger.info("🎫 ПАРСЕР TICKETPRO (С НОРМАЛИЗАЦИЕЙ МЕСТ)")
         logger.info("="*60)
@@ -377,8 +381,9 @@ class TicketproParser:
             events = self.parse_category_page(cat_url, category, display_name)
             all_events.extend(events)
         
+        saved_count = 0
         if all_events:
-            saved = self.save_events(all_events)
+            saved_count = self.save_events(all_events)
             logger.info("\n" + "="*60)
             logger.info("📊 СТАТИСТИКА ЗАПУСКА")
             logger.info(f"   📄 Всего страниц: {self.stats['total_pages']}")
@@ -390,19 +395,22 @@ class TicketproParser:
             logger.info("\n   📊 По категориям:")
             for cat, count in self.stats['by_category'].items():
                 logger.info(f"     {cat}: {count}")
-            logger.info(f"\n   💾 Сохранено в БД: {saved}")
+            logger.info(f"\n   💾 Сохранено в БД: {saved_count}")
             print(f"   📊 Результаты:")
-            print(f"      ✅ Добавлено новых событий: {saved}")
+            print(f"      ✅ Добавлено новых событий: {saved_count}")
             print(f"      🔁 Дубликатов с Relax: {self.stats['duplicates_with_relax']}")
             print(f"      ❌ Не Минск: {self.stats['filtered_out']}")
-            # По категориям ticketpro
             for cat_name, cnt in self.stats['by_category'].items():
                 print(f"RESULT:{cat_name}:{cnt}:{cnt}")
         else:
             logger.warning("❌ События не найдены")
             print("   ⚠️ Ticketpro: события не найдены")
+        
         logger.info("="*60)
+        return saved_count
+
 
 if __name__ == "__main__":
     parser = TicketproParser()
-    parser.run()
+    result = parser.run()
+    print(f"\n✅ Ticketpro парсер завершён. Сохранено событий: {result}")
