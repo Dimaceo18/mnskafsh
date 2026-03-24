@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: minsk-afisha-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python channel_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+
+  - type: cron
+    name: minsk-afisha-parser
+    runtime: python
+    schedule: "0 */4 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -c "import asyncio; from channel_bot import run_parser_and_publish; asyncio.run(run_parser_and_publish())"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: ADMIN_ID
+        sync: false
